@@ -7,8 +7,8 @@ import pandas as pd
 from pptx import Presentation
 import io
 import os
-import glob
-import yt_dlp  # Thư viện tải âm thanh YouTube mới
+import yt_dlp
+from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
 
 # --- 1. CẤU HÌNH TRANG WEB ---
 st.set_page_config(page_title="HAHA Chatbot", page_icon="🌿", layout="wide")
@@ -63,7 +63,7 @@ st.markdown("""
         border-radius: 50%;
     }
 
-    /* Ẩn thành phần thừa */
+    /* Ẩn Sidebar và Header */
     [data-testid="stSidebar"] { display: none; }
     header { visibility: hidden; }
     h1 { color: #ffffff !important; text-shadow: 2px 2px 8px #000000; text-align: center; }
@@ -74,25 +74,26 @@ st.markdown("""
 st.title("🌿 HAHA - Trợ lý AI")
 st.write("Chúc bạn một ngày tốt lành!")
 
-# --- 4. CẤU HÌNH BỘ NÃO (KEY MỚI CỦA BẠN) ---
+# --- 4. CẤU HÌNH BỘ NÃO (ĐÃ SỬA LỖI SECRETS) ---
+# Dùng trực tiếp Key để chạy luôn, không kiểm tra secrets nữa
 genai.configure(api_key='AIzaSyACQ5HcozNFRXoRGpov4MgQJIKRGp-sjOk')
 
 tinh_cach = """
 Bạn tên là HAHA.
 Bạn là trợ lý AI được tạo ra bởi Hoàng Anh.
-Bạn có khả năng Đa phương thức: Nghe, Nhìn, Đọc.
-Đặc biệt: Bạn có thể NGHE âm thanh từ video YouTube để tóm tắt nội dung.
+Bạn có khả năng Đa phương thức: Nghe, Nhìn, Đọc và Tóm tắt Video.
 Phong cách trả lời: Thân thiện, thông minh, dùng icon thiên nhiên (🌿, 🍃).
+Nhiệm vụ: Phân tích dữ liệu và trả lời câu hỏi.
 """
 model = genai.GenerativeModel('gemini-2.0-flash', system_instruction=tinh_cach)
 
 # --- 5. QUẢN LÝ LỊCH SỬ CHAT ---
 if "messages" not in st.session_state:
     st.session_state.messages = [
-        {"role": "model", "parts": ["Chào bạn! Gửi link YouTube tôi sẽ 'nghe' và tóm tắt cho bạn! 🌿"]}
+        {"role": "model", "parts": ["Chào bạn! tôi có thể giúp gì được chọn bạn? 🌿"]}
     ]
 
-# --- 6. HÀM XỬ LÝ FILE ĐA NĂNG ---
+# --- 6. CÁC HÀM XỬ LÝ (FILE & YOUTUBE) ---
 def read_any_file(uploaded_file):
     try:
         filename = uploaded_file.name.lower()
@@ -116,34 +117,38 @@ def read_any_file(uploaded_file):
             return None, "error", None
     except Exception as e: return str(e), "error", None
 
-# --- 7. HÀM TẢI ÂM THANH TỪ YOUTUBE (SỬ DỤNG YT-DLP) ---
 def extract_youtube_id(url):
-    # Regex nhận diện link youtube
     if "youtube.com" in url or "youtu.be" in url:
-        return url # Trả về nguyên link để yt-dlp xử lý
+        return url # Trả về link gốc
     return None
 
-def download_audio_from_youtube(url):
+def get_youtube_transcript_safe(url):
     try:
-        # Cấu hình: Tải audio m4a (nhẹ nhất)
-        ydl_opts = {
-            'format': 'bestaudio[ext=m4a]/bestaudio/best',
-            'outtmpl': 'temp_audio_%(id)s.%(ext)s',
-            'quiet': True,
-            'noplaylist': True
-        }
-        
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            video_id = info['id']
-            ext = info['ext']
-            # Trả về tên file đã tải
-            return f"temp_audio_{video_id}.{ext}", None
-            
+        # Lấy ID
+        if "v=" in url: video_id = url.split("v=")[1].split("&")[0]
+        elif "youtu.be/" in url: video_id = url.split("youtu.be/")[1].split("?")[0]
+        else: return None, "Link không hợp lệ"
+
+        transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=['vi', 'en'])
+        text_content = " ".join([t['text'] for t in transcript])
+        return text_content, None
     except Exception as e:
         return None, str(e)
 
-# --- 8. NÚT CÔNG CỤ (+) ---
+def download_audio_from_youtube(url):
+    try:
+        ydl_opts = {
+            'format': 'bestaudio[ext=m4a]/best',
+            'outtmpl': 'temp_audio_%(id)s.%(ext)s',
+            'quiet': True, 'noplaylist': True
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            return f"temp_audio_{info['id']}.{info['ext']}", None
+    except Exception as e:
+        return None, str(e)
+
+# --- 7. NÚT CÔNG CỤ (+) ---
 with st.popover("➕", use_container_width=False):
     tab1, tab2 = st.tabs(["🎙️ Thu âm", "📂 Tải file"])
     
@@ -160,7 +165,7 @@ with st.popover("➕", use_container_width=False):
             st.success("✅ Đã thu âm!")
 
     with tab2:
-        uploaded_file = st.file_uploader("", type=["jpg", "png", "pdf", "docx", "txt", "mp3", "wav", "m4a"])
+        uploaded_file = st.file_uploader("", type=["jpg", "png", "pdf", "docx", "txt", "mp3", "wav", "m4a", "xlsx", "pptx"])
         if uploaded_file is not None:
             data, type_detected, mime = read_any_file(uploaded_file)
             if type_detected == "error": st.error(f"Lỗi: {data}")
@@ -170,7 +175,7 @@ with st.popover("➕", use_container_width=False):
                 mime_type = mime
                 st.success(f"✅ Đã nhận: {uploaded_file.name}")
 
-# --- 9. HIỂN THỊ TIN NHẮN ---
+# --- 8. HIỂN THỊ TIN NHẮN ---
 for message in st.session_state.messages:
     role = "user" if message["role"] == "user" else "assistant"
     avatar = "🧑‍💻" if role == "user" else "🌳"
@@ -184,7 +189,7 @@ for message in st.session_state.messages:
                     st.audio(part["data"], format=part["mime_type"])
         else: st.markdown(content[0])
 
-# --- 10. XỬ LÝ CHAT ---
+# --- 9. XỬ LÝ CHAT ---
 def loi_giai_stream(response):
     for chunk in response:
         if chunk.text: yield chunk.text
@@ -216,54 +221,54 @@ if prompt := st.chat_input("Nhập câu hỏi hoặc dán link YouTube..."):
     # GỬI LÊN AI
     try:
         with st.chat_message("assistant", avatar="🌳"):
-            # TRƯỜNG HỢP: YOUTUBE (TẢI AUDIO VÀ NGHE)
+            
+            # --- TRƯỜNG HỢP: YOUTUBE ---
             if youtube_url:
-                with st.spinner("🎧 Đang tải âm thanh từ YouTube... (Đợi chút nhé!)"):
-                    audio_path, err = download_audio_from_youtube(youtube_url)
+                full_res = ""
+                # ƯU TIÊN 1: Lấy phụ đề
+                with st.spinner("Đang đọc phụ đề..."):
+                    text_data, err_sub = get_youtube_transcript_safe(youtube_url)
                 
-                if err:
-                    st.error(f"Lỗi tải video: {err}")
-                elif audio_path:
-                    with st.spinner("🤖 Đang nghe và phân tích..."):
-                        # Đọc file âm thanh
-                        with open(audio_path, "rb") as f:
-                            audio_bytes = f.read()
-                        
-                        # Gửi lên Gemini
-                        req = [
-                            "Hãy nghe kỹ đoạn âm thanh này và tóm tắt nội dung chính bằng tiếng Việt.",
-                            {"mime_type": "audio/mp4", "data": audio_bytes}
-                        ]
-                        response = model.generate_content(req, stream=True)
-                        full_response = st.write_stream(loi_giai_stream(response))
-                        st.session_state.messages.append({"role": "model", "parts": [full_response]})
-                        
-                        # Xóa file tạm
-                        try: os.remove(audio_path)
-                        except: pass
+                if text_data:
+                    with st.spinner("HAHA đang tóm tắt... 💭"):
+                        response = model.generate_content(f"Nội dung YouTube:\n{text_data}\n\n---\nYêu cầu: Tóm tắt nội dung.", stream=True)
+                        full_res = st.write_stream(loi_giai_stream(response))
+                else:
+                    # ƯU TIÊN 2: Tải Audio
+                    st.warning(f"⚠️ Không có phụ đề. Đang chuyển sang chế độ NGHE... (sẽ mất khoảng 15s)")
+                    with st.spinner("🎧 Đang tải âm thanh về để nghe..."):
+                        audio_path, err_dl = download_audio_from_youtube(youtube_url)
+                    
+                    if audio_path:
+                        with st.spinner("🤖 Đang nghe và phân tích..."):
+                            with open(audio_path, "rb") as f:
+                                audio_bytes = f.read()
+                            response = model.generate_content(["Nghe và tóm tắt video này:", {"mime_type": "audio/mp4", "data": audio_bytes}], stream=True)
+                            full_res = st.write_stream(loi_giai_stream(response))
+                            try: os.remove(audio_path) 
+                            except: pass
+                    else:
+                        st.error(f"❌ Lỗi: Không thể tải video này. (Lỗi: {err_dl})")
+                        full_res = "Xin lỗi, tôi không thể truy cập nội dung video này."
+                
+                st.session_state.messages.append({"role": "model", "parts": [full_res]})
 
-            # TRƯỜNG HỢP: ẢNH
+            # --- CÁC TRƯỜNG HỢP KHÁC ---
             elif file_type == "image":
-                with st.spinner("HAHA đang suy nghĩ... 💭"):
+                with st.spinner("HAHA đang nhìn... 💭"):
                     response = model.generate_content([prompt, file_content], stream=True)
-                    full_response = st.write_stream(loi_giai_stream(response))
-                    st.session_state.messages.append({"role": "model", "parts": [full_response]})
-            
-            # TRƯỜNG HỢP: ÂM THANH
+                    full_res = st.write_stream(loi_giai_stream(response))
+                    st.session_state.messages.append({"role": "model", "parts": [full_res]})
             elif file_type == "audio":
-                with st.spinner("HAHA đang suy nghĩ... 💭"):
+                with st.spinner("HAHA đang nghe... 💭"):
                     response = model.generate_content([prompt, {"mime_type": mime_type, "data": file_content}], stream=True)
-                    full_response = st.write_stream(loi_giai_stream(response))
-                    st.session_state.messages.append({"role": "model", "parts": [full_response]})
-            
-            # TRƯỜNG HỢP: TÀI LIỆU
+                    full_res = st.write_stream(loi_giai_stream(response))
+                    st.session_state.messages.append({"role": "model", "parts": [full_res]})
             elif file_type == "doc":
-                with st.spinner("HAHA đang suy nghĩ... 💭"):
+                with st.spinner("HAHA đang đọc... 💭"):
                     response = model.generate_content(f"Tài liệu:\n{file_content}\n\nCâu hỏi: {prompt}", stream=True)
-                    full_response = st.write_stream(loi_giai_stream(response))
-                    st.session_state.messages.append({"role": "model", "parts": [full_response]})
-            
-            # TRƯỜNG HỢP: CHAT THƯỜNG
+                    full_res = st.write_stream(loi_giai_stream(response))
+                    st.session_state.messages.append({"role": "model", "parts": [full_res]})
             else:
                 with st.spinner("HAHA đang suy nghĩ... 💭"):
                     chat_hist = []
@@ -272,8 +277,8 @@ if prompt := st.chat_input("Nhập câu hỏi hoặc dán link YouTube..."):
                              chat_hist.append({"role": m["role"], "parts": [m["parts"][0]]})
                     chat = model.start_chat(history=chat_hist)
                     response = chat.send_message(prompt, stream=True)
-                    full_response = st.write_stream(loi_giai_stream(response))
-                    st.session_state.messages.append({"role": "model", "parts": [full_response]})
+                    full_res = st.write_stream(loi_giai_stream(response))
+                    st.session_state.messages.append({"role": "model", "parts": [full_res]})
     
     except Exception as e:
         st.error(f"Lỗi: {e}")
